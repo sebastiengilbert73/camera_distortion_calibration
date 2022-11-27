@@ -5,7 +5,7 @@ import argparse
 import cv2
 import numpy as np
 import utilities.blob_analysis as blob_analysis
-import camera_distortion_calibration.radial_distortion as radial_calib
+import camera_distortion_calibration.checkerboard as checkerboard
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s \t%(message)s')
 
@@ -24,7 +24,7 @@ def main(
     checkerboard_img = cv2.imread(imageFilepath)
     annotated_img = copy.deepcopy(checkerboard_img)
 
-    checkerboard_intersections = radial_calib.CheckerboardIntersections(
+    checkerboard_intersections = checkerboard.CheckerboardIntersections(
         adaptive_threshold_block_side=adaptiveThresholdBlockSide,
         adaptive_threshold_bias=adaptiveThresholdBias,
         correlation_threshold=correlationThreshold,
@@ -32,7 +32,7 @@ def main(
     )
     intersections_list = checkerboard_intersections.FindIntersections(checkerboard_img)
 
-    
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
