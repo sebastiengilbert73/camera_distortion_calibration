@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s \t
 def main():
     logging.debug("test_optimization.main()")
 
-    neural_net = radial_dist.DistortionParametersOptimizer((320, 240), 0.00000, (640, 480))
+    neural_net = radial_dist.DistortionParametersOptimizer((320, 240), 0.00000, (480, 640))
     real_rho = 89
     real_theta = 2.06
     noise_sigma = 3.0
@@ -24,13 +24,6 @@ def main():
         points_tsr[pt_ndx, 1] = y
     line = neural_net.Line(points_tsr)
     logging.info(f"test_optimization.main(): line = {line}")
-
-    horizontal_points_tsr = torch.from_numpy(np.load("../images/horizontal_intersections.npy"))  # (6, 6, 2)
-    vertical_points_tsr = torch.from_numpy(np.load("../images/vertical_intersections.npy"))  # (6, 6, 2)
-    line_points_tsr = torch.cat([horizontal_points_tsr, vertical_points_tsr], dim=0)  # (12, 6, 2)
-    #neural_net(vertical_points_tsr)
-
-
 
 
 
