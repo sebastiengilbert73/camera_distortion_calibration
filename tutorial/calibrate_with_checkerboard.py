@@ -7,6 +7,9 @@ import cv2
 import numpy as np
 import camera_distortion_calibration.checkerboard as checkerboard
 import camera_distortion_calibration.radial_distortion as radial_dist
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('TKAgg')
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s \t%(message)s')
 
@@ -38,12 +41,47 @@ def main():
         debug_directory=output_directory
     )
     intersections_list = checkerboard_intersections.FindIntersections(checkerboard_img)
+    # Display the found intersections
+    intersections_annotated_img = cv2.imread(os.path.join(output_directory, "CheckerboardIntersections_FindIntersections_annotated.png"))
+    cv2.imshow("Found feature points", intersections_annotated_img)
+    cv2.waitKey(0)
 
     # Create a RadialDistortion object, that will optimize its parameters
     radial_distortion = radial_dist.RadialDistortion((checkerboard_img.shape[0], checkerboard_img.shape[1]))
     # Start the optimization
     epoch_loss_center_alpha_list = radial_distortion.Optimize(intersections_list, grid_shapeHW)
+    Plot([epoch for epoch, _, _, _ in epoch_loss_center_alpha_list],
+         [[loss for _, loss, _, _ in epoch_loss_center_alpha_list]], ["loss"])
 
+    # Undistort the points
+    for p in intersections_list:
+        undistorted_p = radial_distortion.UndistortPoint(p)
+        cv2.circle(annotated_img, (round(undistorted_p[0]), round(undistorted_p[1])), 3, (255, 0, 0), thickness=-1)
+    cv2.imshow("The undistorted feature points", annotated_img)
+    cv2.waitKey()
+
+    # Undistort the checkerboard image
+    undistorted_checkerboard_img = radial_distortion.UndistortImage(checkerboard_img)
+    cv2.imshow("The undistorted checkerboard image (no filling)", undistorted_checkerboard_img)
+    cv2.waitKey()
+    cv2.imwrite(os.path.join(output_directory, "calibrateWithCheckerboard_main_undistortedCheckerboard.png"), undistorted_checkerboard_img)
+
+    # Undistort the checkerboard image with filling
+    undistorted_checkerboard_filled_img = radial_distortion.UndistortImage(checkerboard_img, fill_with_local_median=True)
+    cv2.imshow("The undistorted checkerboard image (with filling)", undistorted_checkerboard_filled_img)
+    cv2.waitKey()
+    cv2.imwrite(os.path.join(output_directory, "calibrateWithCheckerboard_main_undistortedCheckerboardFillled.png"),
+                undistorted_checkerboard_filled_img)
+
+
+def Plot(xs, ys_list, y_labels_list):
+    fig, ax = plt.subplots()
+    for plot_ndx in range(len(ys_list)):
+        ax.plot(xs, ys_list[plot_ndx])
+        ax.set(xlabel='epoch', ylabel=y_labels_list[plot_ndx])
+    ax.legend()
+    ax.grid()
+    plt.show()
 
 if __name__ == '__main__':
     main()
