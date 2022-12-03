@@ -35,7 +35,7 @@ def main(
     )
     intersections_list = checkerboard_intersections.FindIntersections(checkerboard_img)
 
-    radial_distortion = radial_dist.RadialDistortion()
+    radial_distortion = radial_dist.RadialDistortion((checkerboard_img.shape[0], checkerboard_img.shape[1]))
     horizontal_lines_points, vertical_lines_points = radial_distortion.GroupCheckerboardPoints(intersections_list, (6, 6))
     if len(horizontal_lines_points) != gridShapeHW[0]:
         raise ValueError(f"calibrate.main(): len(horizontal_lines_points) ({len(horizontal_lines_points)}) != gridShapeHW[0] ({gridShapeHW[0]})")
@@ -55,9 +55,16 @@ def main(
         for p in vertical_line_points:
             cv2.circle(annotated_img, (round(p[0]), round(p[1])), 7, color)
 
-    epoch_loss_center_alpha_list = radial_distortion.Optimize(intersections_list, gridShapeHW, (checkerboard_img.shape[0], checkerboard_img.shape[1]))
+    epoch_loss_center_alpha_list = radial_distortion.Optimize(intersections_list, gridShapeHW)
     logging.info(f"radial_distortion.center = {radial_distortion.center}; radial_distortion.alpha = {radial_distortion.alpha}")
     #print(f"epoch_loss_center_alpha_list =\n{epoch_loss_center_alpha_list}")
+
+    # Undistort the points
+    for p in intersections_list:
+        undistorted_p = radial_distortion.UndistortPoint(p)
+        cv2.circle(annotated_img, (round(undistorted_p[0]), round(undistorted_p[1])), 3, (255, 0, 0), thickness=-1)
+    # Undistort the checkerboard image
+    undistorted_checkerboard_img = radial_distortion.UndistortImage(checkerboard_img)
 
     # Save the points as an (N, n_points, 2) tensor
     horizontal_intersections_arr = np.zeros((len(horizontal_lines_points), len(horizontal_lines_points[0]), 2), dtype=float)
@@ -83,6 +90,9 @@ def main(
 
     annotated_img_filepath = os.path.join(outputDirectory, "calibrate_main_annotated.png")
     cv2.imwrite(annotated_img_filepath, annotated_img)
+
+    undistorted_checkerboard_img_filepath = os.path.join(outputDirectory, "calibrate_main_undistortedCheckerboard.png")
+    cv2.imwrite(undistorted_checkerboard_img_filepath, undistorted_checkerboard_img)
 
 
 if __name__ == '__main__':
