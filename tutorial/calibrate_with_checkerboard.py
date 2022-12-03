@@ -1,11 +1,8 @@
-import ast
 import copy
 import os
 import logging
-import argparse
 import cv2
-import numpy as np
-import camera_distortion_calibration.checkerboard as checkerboard
+from camera_distortion_calibration import checkerboard
 import camera_distortion_calibration.radial_distortion as radial_dist
 import matplotlib.pyplot as plt
 import matplotlib
