@@ -91,7 +91,7 @@ class RadialDistortion():
         else:
             return undistorted_p
 
-    def UndistortImage(self, image):
+    def UndistortImage(self, image, fill_with_local_median=False):
         undistorted_img = np.zeros(image.shape, dtype=np.uint8)
         for y in range(image.shape[0]):
             for x in range(image.shape[1]):
@@ -99,6 +99,18 @@ class RadialDistortion():
                 if undistorted_p[0] >= 0 and undistorted_p[0] < undistorted_img.shape[1] and \
                     undistorted_p[1] >= 0 and undistorted_p[1] < undistorted_img.shape[0]:
                     undistorted_img[undistorted_p[1], undistorted_p[0], :] = image[y, x]
+        if fill_with_local_median:
+            for y in range(undistorted_img.shape[0]):
+                for x in range(undistorted_img.shape[1]):
+                    if undistorted_img[y, x].all() == 0:
+
+                        neighborhood_rect = [max(x - 2, 0), max(y - 2, 0), 5, 5]
+                        neighborhood_img = undistorted_img[neighborhood_rect[1]: neighborhood_rect[1] + neighborhood_rect[3],
+                                           neighborhood_rect[0]: neighborhood_rect[0] + neighborhood_rect[2], :]
+                        for channel in range(3):
+                            median = np.median(neighborhood_img[:, :, channel])
+                            undistorted_img[y, x, channel] = median
+
         return undistorted_img
 
 
