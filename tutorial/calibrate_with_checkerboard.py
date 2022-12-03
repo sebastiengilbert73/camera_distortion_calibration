@@ -7,6 +7,7 @@ import camera_distortion_calibration.radial_distortion as radial_dist
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('TKAgg')
+import pickle
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s \t%(message)s')
 
@@ -70,6 +71,14 @@ def main():
     cv2.imwrite(os.path.join(output_directory, "calibrateWithCheckerboard_main_undistortedCheckerboardFillled.png"),
                 undistorted_checkerboard_filled_img)
 
+    # Save the calibration
+    # It will be possible to load the calibration file with the following code:
+    # with open(filepath, 'rb') as obj_file:
+    #    radial_distortion_obj = pickle.load(obj_file)
+    calibration_filepath = os.path.join(output_directory, "calibration.pkl")
+    with open(calibration_filepath, 'wb') as calibration_file:
+        pickle.dump(radial_distortion, calibration_file, pickle.HIGHEST_PROTOCOL)
+    logging.info(f"Saved calibration file to {calibration_filepath}")
 
 def Plot(xs, ys_list, y_labels_list):
     fig, ax = plt.subplots()
