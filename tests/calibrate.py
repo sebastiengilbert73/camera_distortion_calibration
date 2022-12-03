@@ -57,7 +57,6 @@ def main(
 
     epoch_loss_center_alpha_list = radial_distortion.Optimize(intersections_list, gridShapeHW)
     logging.info(f"radial_distortion.center = {radial_distortion.center}; radial_distortion.alpha = {radial_distortion.alpha}")
-    #print(f"epoch_loss_center_alpha_list =\n{epoch_loss_center_alpha_list}")
 
     # Undistort the points
     for p in intersections_list:
