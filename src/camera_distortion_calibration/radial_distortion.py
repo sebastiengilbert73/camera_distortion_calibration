@@ -8,9 +8,10 @@ import torch
 import math
 
 class RadialDistortion():
-    def __init__(self, center=None, alpha=None):
+    def __init__(self, image_sizeHW, center=(0.5, 0.5), alpha=0.0):
         self.center = center
         self.alpha = alpha
+        self.image_sizeHW = image_sizeHW
 
     def GroupCheckerboardPoints(self, intersection_points_list, grid_shapeHW):
         if len(intersection_points_list) != grid_shapeHW[0] * grid_shapeHW[1]:
@@ -44,7 +45,6 @@ class RadialDistortion():
     def Optimize(self,
                  intersection_points_list,
                  grid_shapeHW,
-                 image_sizeHW,
                  learning_rate=0.1,
                  momentum=0.9,
                  weight_decay=0,
@@ -52,8 +52,8 @@ class RadialDistortion():
         horizontal_lines, vertical_lines = self.GroupCheckerboardPoints(intersection_points_list, grid_shapeHW)
         line_points_tsr = torch.cat([torch.tensor(horizontal_lines), torch.tensor(vertical_lines)], dim=0)  # (N_line, n_pts_per_line, 2)
 
-        neural_net = DistortionParametersOptimizer((image_sizeHW[1]//2, image_sizeHW[0]//2), 0.00000,
-                                                   image_sizeHW)
+        neural_net = DistortionParametersOptimizer((self.image_sizeHW[1]//2, self.image_sizeHW[0]//2), 0.00000,
+                                                   self.image_sizeHW)
         optimizer = torch.optim.Adam(neural_net.parameters(), lr=learning_rate, betas=(momentum, 0.999),
                                      weight_decay=weight_decay)
         criterion = torch.nn.MSELoss()
@@ -70,12 +70,36 @@ class RadialDistortion():
             optimizer.step()
             print(f"loss.item() = {loss.item()}")
             epoch_loss_center_alpha_list.append((epoch, loss.item(),
-                                            (neural_net.center[0].item() * image_sizeHW[1], neural_net.center[1].item() * image_sizeHW[0]),
+                                            (neural_net.center[0].item() * self.image_sizeHW[1], neural_net.center[1].item() * self.image_sizeHW[0]),
                                             neural_net.alpha.item()))
 
-        self.center = (neural_net.center[0].item() * image_sizeHW[1], neural_net.center[1].item() * image_sizeHW[0])
+        self.center = (neural_net.center[0].item() * self.image_sizeHW[1], neural_net.center[1].item() * self.image_sizeHW[0])
         self.alpha = neural_net.alpha.item()
         return epoch_loss_center_alpha_list
+
+    def UndistortPoint(self, point, must_be_rounded=False):
+        shifted_p = (point[0] - self.center[0], point[1] - self.center[1])
+        shifted_p_scaled = (shifted_p[0]/self.image_sizeHW[1], shifted_p[1]/self.image_sizeHW[0])
+        shifted_p_squared_sum = shifted_p_scaled[0]**2 + shifted_p_scaled[1]**2
+        distorted_radius = math.sqrt(shifted_p_squared_sum)
+        undistortion_factor = 1.0 + self.alpha * distorted_radius**2
+        scaled_shifted_undistorted_p = (undistortion_factor * shifted_p_scaled[0], undistortion_factor * shifted_p_scaled[1])
+        shifted_undistorted_p = (scaled_shifted_undistorted_p[0] * self.image_sizeHW[1], scaled_shifted_undistorted_p[1] * self.image_sizeHW[0])
+        undistorted_p = (shifted_undistorted_p[0] + self.center[0], shifted_undistorted_p[1] + self.center[1])
+        if must_be_rounded:
+            return (round(undistorted_p[0]), round(undistorted_p[1]))
+        else:
+            return undistorted_p
+
+    def UndistortImage(self, image):
+        undistorted_img = np.zeros(image.shape, dtype=np.uint8)
+        for y in range(image.shape[0]):
+            for x in range(image.shape[1]):
+                undistorted_p = self.UndistortPoint((x, y), must_be_rounded=True)
+                if undistorted_p[0] >= 0 and undistorted_p[0] < undistorted_img.shape[1] and \
+                    undistorted_p[1] >= 0 and undistorted_p[1] < undistorted_img.shape[0]:
+                    undistorted_img[undistorted_p[1], undistorted_p[0], :] = image[y, x]
+        return undistorted_img
 
 
 class DistortionParametersOptimizer(torch.nn.Module):
@@ -159,23 +183,11 @@ class DistortionParametersOptimizer(torch.nn.Module):
     def Undistort(self, p):
         shifted_p = p - self.center
         shifted_p_squared = torch.pow(shifted_p, 2)
-        #print(f"DistortionParametersOptimizer.Undistort(): shifted_p_squared = {shifted_p_squared}")
         shifted_p_squared_sum = torch.sum(shifted_p_squared,dim=0)# torch.tensor(shifted_p_squared[0] + shifted_p_squared[1])#
-        #print(f"DistortionParametersOptimizer.Undistort(): shifted_p_squared_sum = {shifted_p_squared_sum}")
-        #print(f"DistortionParametersOptimizer.Undistort(): type(shifted_p_squared_sum) = {type(shifted_p_squared_sum)}")
-        #print(f"DistortionParametersOptimizer.Undistort(): shifted_p_squared_sum.requires_grad = {shifted_p_squared_sum.requires_grad}")
         distorted_radius = torch.sqrt(shifted_p_squared_sum)
-        #print(f"DistortionParametersOptimizer.Undistort(): torch.pow(shifted_p, 2) = {torch.pow(shifted_p, 2)}")
-        #print(f"DistortionParametersOptimizer.Undistort(): torch.sum(torch.pow(shifted_p, 2)) = {torch.sum(torch.pow(shifted_p, 2))}")
-        #print(f"DistortionParametersOptimizer.Undistort(): distorted_radius = {distorted_radius}")
-        #print(f"DistortionParametersOptimizer.Undistort(): distorted_radius.requires_grad = {distorted_radius.requires_grad}")
-        #undistorted_radius = distorted_radius + self.alpha * torch.pow(distorted_radius, 2)
         undistortion_factor = torch.tensor(1.0) + self.alpha * torch.pow(distorted_radius, 2)
-        #print(f"DistortionParametersOptimizer.Undistort(): undistortion_factor = {undistortion_factor}")
-        #print(f"DistortionParametersOptimizer.Undistort(): undistortion_factor.requires_grad = {undistortion_factor.requires_grad}")
-        shifted_undistorted_p = undistortion_factor * shifted_p #torch.tensor([undistortion_factor * shifted_p[0], undistortion_factor * shifted_p[1]])
+        shifted_undistorted_p = undistortion_factor * shifted_p
         unshifted_undistorted_p = shifted_undistorted_p + self.center
-        #print (f"DistortionParametersOptimizer.Undistort(): unshifted_undistorted_p = {unshifted_undistorted_p}")
         return unshifted_undistorted_p
 
     def UndistortTensor(self, points_tsr):  # points_tsr.shape = (N, n_points, 2)
