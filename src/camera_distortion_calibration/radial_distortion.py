@@ -5,6 +5,7 @@ import argparse
 import cv2
 import numpy as np
 import torch
+import math
 
 class RadialDistortion():
     def __init__(self, center=None, alpha=None):
@@ -40,16 +41,68 @@ class RadialDistortion():
 
         return horizontal_lines, vertical_lines
 
+    def Optimize(self,
+                 intersection_points_list,
+                 grid_shapeHW,
+                 image_sizeHW,
+                 learning_rate=0.1,
+                 momentum=0.9,
+                 weight_decay=0,
+                 number_of_epochs=100):
+        horizontal_lines, vertical_lines = self.GroupCheckerboardPoints(intersection_points_list, grid_shapeHW)
+        line_points_tsr = torch.cat([torch.tensor(horizontal_lines), torch.tensor(vertical_lines)], dim=0)  # (N_line, n_pts_per_line, 2)
+
+        neural_net = DistortionParametersOptimizer((image_sizeHW[1]//2, image_sizeHW[0]//2), 0.00000,
+                                                   image_sizeHW)
+        optimizer = torch.optim.Adam(neural_net.parameters(), lr=learning_rate, betas=(momentum, 0.999),
+                                     weight_decay=weight_decay)
+        criterion = torch.nn.MSELoss()
+        epoch_loss_center_alpha_list = []
+        for epoch in range(1, number_of_epochs + 1):
+            logging.info("*** Epoch {} ***".format(epoch))
+            neural_net.train()
+
+            target_output_tsr = torch.zeros(line_points_tsr.shape[0])
+            optimizer.zero_grad()
+            output_tsr = neural_net(line_points_tsr)
+            loss = criterion(output_tsr, target_output_tsr)
+            loss.backward()
+            optimizer.step()
+            print(f"loss.item() = {loss.item()}")
+            epoch_loss_center_alpha_list.append((epoch, loss.item(),
+                                            (neural_net.center[0].item() * image_sizeHW[1], neural_net.center[1].item() * image_sizeHW[0]),
+                                            neural_net.alpha.item()))
+
+        self.center = (neural_net.center[0].item() * image_sizeHW[1], neural_net.center[1].item() * image_sizeHW[0])
+        self.alpha = neural_net.alpha.item()
+        return epoch_loss_center_alpha_list
+
 
 class DistortionParametersOptimizer(torch.nn.Module):
-    def __init__(self, center, alpha):
+    def __init__(self, center, alpha, image_sizeHW, zero_threshold=1e-12):
         super(DistortionParametersOptimizer, self).__init__()
-        self.center = center
-        self.alpha = alpha
-        self.zero_threshold = 0.000001
+        self.center = torch.nn.Parameter(torch.tensor([center[0]/image_sizeHW[1], center[1]/image_sizeHW[0]]).float())
+        self.alpha = torch.nn.Parameter(torch.tensor(alpha).float())
+        self.image_sizeHW = image_sizeHW
+        self.zero_threshold = zero_threshold
 
     def forward(self, input_tsr):  # input_tsr.shape = (N, n_points, 2)
-        shifted_points_tsr = input_tsr - self.center
+        error_tsr = torch.zeros(input_tsr.shape[0])  # (N)
+        scaled_input_tsr = self.ScaleWithDimensions(input_tsr)
+        #shifted_points_tsr = input_tsr - self.center  # (N, n_points, 2)
+        undistorted_points_tsr = self.UndistortTensor(scaled_input_tsr)  # (N, n_points, 2)
+        for line_ndx in range(undistorted_points_tsr.shape[0]):
+            line_error = torch.tensor(0).double()
+            line_points_tsr = undistorted_points_tsr[line_ndx]  # (n_points, 2)
+            line = self.Line(line_points_tsr)  # (rho, theta)
+            #print(f"DistortionParametersOptimizer.forward(): line_ndx = {line_ndx}; line = {line}")
+            for point_ndx in range(line_points_tsr.shape[0]):
+                projection, distance = self.Project(line_points_tsr[point_ndx], line[0], line[1])
+                error = torch.sum(torch.pow(projection - line_points_tsr[point_ndx], 2))
+                line_error += error
+            #print(f"DistortionParametersOptimizer.forward(): line_error = {line_error}")
+            error_tsr[line_ndx] = line_error
+        return error_tsr
 
     def Line(self, points_tsr):  # points_tsr.shape = (n_points, 2)
         xs = points_tsr[:, 0]
@@ -76,17 +129,68 @@ class DistortionParametersOptimizer(torch.nn.Module):
                     A[row, 2] = -1
                 # Solution to a system of homogeneous linear equations. Cf. https://stackoverflow.com/questions/1835246/how-to-solve-homogeneous-linear-equations-with-numpy
                 e_vals, e_vecs = torch.linalg.eig(torch.matmul(A.T, A))
-                print(f"DistortionParametersOptimizer.Line(): torch.matmul(A.T, A) = {torch.matmul(A.T, A)}")
+                #print(f"DistortionParametersOptimizer.Line(): torch.matmul(A.T, A) = {torch.matmul(A.T, A)}")
                 # Extract the eigenvector (column) associated with the minimum eigenvalue
-                print (f"DistortionParametersOptimizer.Line(): e_vals = {e_vals}")
+                #print (f"DistortionParametersOptimizer.Line(): e_vals = {e_vals}")
                 z = e_vecs[:, torch.argmin(e_vals.real)]
                 # Multiply by a factor such that cos^2(theta) + sin^2(theta) = 1
                 r2 = z[0] ** 2 + z[1] ** 2
                 if abs(r2) < self.zero_threshold:
                     raise ValueError(f"DistortionParametersOptimizer.Line(): z[0]**2 + z[1]**2 ({r2}) < {self.zero_threshold}")
                 z = z / torch.sqrt(r2)
-                print(f"DistortionParametersOptimizer.Line(): z = {z}")
-                #print
+                #print(f"DistortionParametersOptimizer.Line(): z = {z}")
                 theta = torch.angle(torch.complex(z[0].real, z[1].real))
                 rho = z[2].real
                 return (rho, theta)
+
+    def Project(self, p, rho, theta):
+        # | sin(theta)      cos(theta) | | beta  | = |    x - rho * cos(theta)    |
+        # | -cos(theta)     sin(theta) | | gamma |   |    y - rho * sin(theta)    |
+        # beta is the distance between the central point (rho * cos(theta), rho * sin(theta)) and the projection
+        # gamma is the distance between the point of interest and the projection
+        A = torch.tensor([[math.sin(theta), math.cos(theta)], [-math.cos(theta), math.sin(theta)]])
+        b = torch.tensor([p[0] - rho * math.cos(theta), p[1] - rho * math.sin(theta)])
+        #print(f"DistortionParametersOptimizer.Project(): A.dtype = {A.dtype}; b.dtype = {b.dtype}")
+        beta_gamma = torch.linalg.solve(A, b)
+        p_prime = torch.tensor([rho * math.cos(theta) + beta_gamma[0] * math.sin(theta),
+                               rho * math.sin(theta) - beta_gamma[0] * math.cos(theta)])
+        return p_prime, beta_gamma[1]  # gamma is the distance between the point of interest and the projection
+
+    def Undistort(self, p):
+        shifted_p = p - self.center
+        shifted_p_squared = torch.pow(shifted_p, 2)
+        #print(f"DistortionParametersOptimizer.Undistort(): shifted_p_squared = {shifted_p_squared}")
+        shifted_p_squared_sum = torch.sum(shifted_p_squared,dim=0)# torch.tensor(shifted_p_squared[0] + shifted_p_squared[1])#
+        #print(f"DistortionParametersOptimizer.Undistort(): shifted_p_squared_sum = {shifted_p_squared_sum}")
+        #print(f"DistortionParametersOptimizer.Undistort(): type(shifted_p_squared_sum) = {type(shifted_p_squared_sum)}")
+        #print(f"DistortionParametersOptimizer.Undistort(): shifted_p_squared_sum.requires_grad = {shifted_p_squared_sum.requires_grad}")
+        distorted_radius = torch.sqrt(shifted_p_squared_sum)
+        #print(f"DistortionParametersOptimizer.Undistort(): torch.pow(shifted_p, 2) = {torch.pow(shifted_p, 2)}")
+        #print(f"DistortionParametersOptimizer.Undistort(): torch.sum(torch.pow(shifted_p, 2)) = {torch.sum(torch.pow(shifted_p, 2))}")
+        #print(f"DistortionParametersOptimizer.Undistort(): distorted_radius = {distorted_radius}")
+        #print(f"DistortionParametersOptimizer.Undistort(): distorted_radius.requires_grad = {distorted_radius.requires_grad}")
+        #undistorted_radius = distorted_radius + self.alpha * torch.pow(distorted_radius, 2)
+        undistortion_factor = torch.tensor(1.0) + self.alpha * torch.pow(distorted_radius, 2)
+        #print(f"DistortionParametersOptimizer.Undistort(): undistortion_factor = {undistortion_factor}")
+        #print(f"DistortionParametersOptimizer.Undistort(): undistortion_factor.requires_grad = {undistortion_factor.requires_grad}")
+        shifted_undistorted_p = undistortion_factor * shifted_p #torch.tensor([undistortion_factor * shifted_p[0], undistortion_factor * shifted_p[1]])
+        unshifted_undistorted_p = shifted_undistorted_p + self.center
+        #print (f"DistortionParametersOptimizer.Undistort(): unshifted_undistorted_p = {unshifted_undistorted_p}")
+        return unshifted_undistorted_p
+
+    def UndistortTensor(self, points_tsr):  # points_tsr.shape = (N, n_points, 2)
+        undistorted_points_tsr = torch.zeros(points_tsr.shape)  # (N, n_points, 2)
+        for line_ndx in range(points_tsr.shape[0]):
+            line_pts_tsr = points_tsr[line_ndx]  # (n_points, 2)
+            for pt_ndx in range(line_pts_tsr.shape[0]):
+                undistorted_pt = self.Undistort(line_pts_tsr[pt_ndx])
+                undistorted_points_tsr[line_ndx, pt_ndx, :] = undistorted_pt
+        return undistorted_points_tsr
+
+    def ScaleWithDimensions(self, input_tsr):  # (N, n_points, 2)
+        scaled_tsr = torch.zeros(input_tsr.shape)  # (N, n_points, 2)
+        for line_ndx in range(input_tsr.shape[0]):
+            for pt_ndx in range(input_tsr.shape[1]):
+                scaled_tsr[line_ndx, pt_ndx, 0] = input_tsr[line_ndx, pt_ndx, 0]/self.image_sizeHW[1]
+                scaled_tsr[line_ndx, pt_ndx, 1] = input_tsr[line_ndx, pt_ndx, 1] / self.image_sizeHW[0]
+        return scaled_tsr
