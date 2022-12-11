@@ -8,6 +8,7 @@ import numpy as np
 import utilities.blob_analysis as blob_analysis
 import camera_distortion_calibration.checkerboard as checkerboard
 import camera_distortion_calibration.radial_distortion as radial_dist
+import pickle
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(levelname)s \t%(message)s')
 
@@ -92,6 +93,15 @@ def main(
 
     undistorted_checkerboard_img_filepath = os.path.join(outputDirectory, "calibrate_main_undistortedCheckerboard.png")
     cv2.imwrite(undistorted_checkerboard_img_filepath, undistorted_checkerboard_img)
+
+    # Save the calibration
+    # It will be possible to load the calibration file with the following code:
+    # with open(filepath, 'rb') as obj_file:
+    #    radial_distortion_obj = pickle.load(obj_file)
+    calibration_filepath = os.path.join(outputDirectory, "calibration.pkl")
+    with open(calibration_filepath, 'wb') as calibration_file:
+        pickle.dump(radial_distortion, calibration_file, pickle.HIGHEST_PROTOCOL)
+    logging.info(f"Saved calibration file to {calibration_filepath}")
 
 
 if __name__ == '__main__':
